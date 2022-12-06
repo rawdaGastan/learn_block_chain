@@ -36,7 +36,7 @@ var balancesListCmd = &cobra.Command{
 		fmt.Println("__________________")
 		fmt.Println("")
 		for account, balance := range state.Balances {
-			fmt.Println(fmt.Sprintf("%s: %d", account, balance))
+			fmt.Printf("%s: %d\n", account, balance)
 		}
 	},
 }
