@@ -9,75 +9,50 @@ import (
 	"github.com/rawdaGastan/learn_block_chain/internal"
 )
 
-const httpPort = 8080
+const DefaultHTTPort = 8080
 
-type ErrRes struct {
-	Error string `json:"error"`
+type PeerNode struct {
+	IP          string `json:"ip"`
+	Port        uint64 `json:"port"`
+	IsBootstrap bool   `json:"is_bootstrap"`
+
+	// Whenever my node already established connection, sync with this Peer
+	connected bool
 }
 
-type BalancesRes struct {
-	Hash     internal.Hash             `json:"block_hash"`
-	Balances map[internal.Account]uint `json:"balances"`
+type Node struct {
+	dataDir    string
+	port       uint64 // To inject the State into HTTP handlers
+	state      *internal.State
+	knownPeers []PeerNode
 }
 
-type TxAddReq struct {
-	From  string `json:"from"`
-	To    string `json:"to"`
-	Value uint   `json:"value"`
-	Data  string `json:"data"`
+func New(dataDir string, port uint64, bootstrap PeerNode) *Node {
+	return &Node{
+		dataDir:    dataDir,
+		port:       port,
+		knownPeers: []PeerNode{bootstrap},
+	}
 }
 
-type TxAddRes struct {
-	Hash internal.Hash `json:"block_hash"`
-}
-
-func Run(dataDir string) error {
-	fmt.Printf("Listening on HTTP port: %d\n", httpPort)
-
-	state, err := internal.NewStateFromDisk(dataDir)
+func (n *Node) Run() error {
+	fmt.Println(fmt.Sprintf("Listening on HTTP port: %d", n.port))
+	state, err := internal.NewStateFromDisk(n.dataDir)
 	if err != nil {
 		return err
 	}
 	defer state.Close()
-
+	n.state = state
 	http.HandleFunc("/balances/list", func(w http.ResponseWriter, r *http.Request) {
 		listBalancesHandler(w, r, state)
 	})
-
 	http.HandleFunc("/tx/add", func(w http.ResponseWriter, r *http.Request) {
 		txAddHandler(w, r, state)
 	})
-
-	return http.ListenAndServe(fmt.Sprintf(":%d", httpPort), nil)
-}
-
-func listBalancesHandler(w http.ResponseWriter, r *http.Request, state *internal.State) {
-	writeRes(w, BalancesRes{state.LatestBlockHash(), state.Balances})
-}
-
-func txAddHandler(w http.ResponseWriter, r *http.Request, state *internal.State) {
-	req := TxAddReq{}
-	err := readReq(r, &req)
-	if err != nil {
-		writeErrRes(w, err)
-		return
-	}
-
-	tx := internal.NewTx(internal.NewAccount(req.From), internal.NewAccount(req.To), req.Value, req.Data)
-
-	err = state.AddTx(tx)
-	if err != nil {
-		writeErrRes(w, err)
-		return
-	}
-
-	hash, err := state.Persist()
-	if err != nil {
-		writeErrRes(w, err)
-		return
-	}
-
-	writeRes(w, TxAddRes{hash})
+	http.HandleFunc("/node/status", func(w http.ResponseWriter, r *http.Request) {
+		statusHandler(w, r, n)
+	})
+	return http.ListenAndServe(fmt.Sprintf(":%d", n.port), nil)
 }
 
 func writeErrRes(w http.ResponseWriter, err error) {

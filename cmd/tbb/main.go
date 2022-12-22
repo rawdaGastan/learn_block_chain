@@ -4,10 +4,20 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/rawdaGastan/learn_block_chain/internal"
 	"github.com/spf13/cobra"
 )
 
+const flagKeystoreFile = "keystore"
 const flagDataDir = "datadir"
+const flagMiner = "miner"
+const flagSSLEmail = "ssl-email"
+const flagDisableSSL = "disable-ssl"
+const flagIP = "ip"
+const flagPort = "port"
+const flagBootstrapAcc = "bootstrap-account"
+const flagBootstrapIp = "bootstrap-ip"
+const flagBootstrapPort = "bootstrap-port"
 
 func main() {
 	var tbbCmd = &cobra.Command{
@@ -36,4 +46,15 @@ func addDefaultRequiredFlags(cmd *cobra.Command) {
 
 func incorrectUsageErr() error {
 	return fmt.Errorf("incorrect usage")
+}
+
+func addKeystoreFlag(cmd *cobra.Command) {
+	cmd.Flags().String(flagKeystoreFile, "", "Absolute path to the encrypted keystore file")
+	cmd.MarkFlagRequired(flagKeystoreFile)
+}
+
+func getDataDirFromCmd(cmd *cobra.Command) string {
+	dataDir, _ := cmd.Flags().GetString(flagDataDir)
+
+	return internal.ExpandPath(dataDir)
 }
