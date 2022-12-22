@@ -2,7 +2,6 @@ package internal
 
 import (
 	"encoding/json"
-	"io/ioutil"
 	"os"
 )
 
@@ -35,5 +34,5 @@ func loadGenesis(path string) (genesis, error) {
 }
 
 func writeGenesisToDisk(path string) error {
-	return ioutil.WriteFile(path, []byte(genesisJson), 0644)
+	return os.WriteFile(path, []byte(genesisJson), 0644)
 }

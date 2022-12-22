@@ -11,9 +11,13 @@ This is the code example for Lukas Lukac build a Blockchain from Scratch in Go b
 ## Install
 
 - `go install ./cmd/tbb/...`
+- `go install ./cmd/tbbmigrate/...`
 - `export PATH=/home/rawda/go/bin/:$PATH`
 
 ## Use
 
 - `tbb tx add --from=rawda --to=rawda --value=100 --data=reward`
 - `tbb balances list`
+- `tbbmigrate`
+
+## AWS

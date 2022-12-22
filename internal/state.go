@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 )
 
@@ -16,14 +15,13 @@ type State struct {
 	latestBlockHash Hash
 }
 
-func NewStateFromDisk() (*State, error) {
-	// get current working directory
-	cwd, err := os.Getwd()
+func NewStateFromDisk(dataDir string) (*State, error) {
+	err := InitDataDirIfNotExists(dataDir)
 	if err != nil {
 		return nil, err
 	}
-	genFilePath := filepath.Join(cwd, "database", "genesis.json")
-	gen, err := loadGenesis(genFilePath)
+
+	gen, err := loadGenesis(getGenesisJsonFilePath(dataDir))
 	if err != nil {
 		return nil, err
 	}
@@ -33,11 +31,12 @@ func NewStateFromDisk() (*State, error) {
 
 	}
 
-	txDbFilePath := filepath.Join(cwd, "database", "block.db")
-	f, err := os.OpenFile(txDbFilePath, os.O_APPEND|os.O_RDWR, 0600)
+	dbFilepath := getBlocksDbFilePath(dataDir)
+	f, err := os.OpenFile(dbFilepath, os.O_APPEND|os.O_RDWR, 0600)
 	if err != nil {
 		return nil, err
 	}
+
 	scanner := bufio.NewScanner(f)
 	state := &State{balances, make([]Tx, 0), f, Hash{}}
 
