@@ -2,16 +2,20 @@ package internal
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 type State struct {
-	Balances  map[Account]uint
-	txMempool []Tx
-	dbFile    *os.File
+	Balances        map[Account]uint
+	txMempool       []Tx
+	dbFile          *os.File
+	latestBlockHash Hash
 }
 
 func NewStateFromDisk() (*State, error) {
@@ -37,7 +41,7 @@ func NewStateFromDisk() (*State, error) {
 		return nil, err
 	}
 	scanner := bufio.NewScanner(f)
-	state := &State{balances, make([]Tx, 0), f}
+	state := &State{balances, make([]Tx, 0), f, Hash{}}
 
 	// Iterate over each the tx.db file's line
 	for scanner.Scan() {
@@ -53,6 +57,12 @@ func NewStateFromDisk() (*State, error) {
 			return nil, err
 		}
 	}
+
+	err = state.doSnapshot()
+	if err != nil {
+		return nil, err
+	}
+
 	return state, nil
 }
 
@@ -77,25 +87,59 @@ func (s *State) Add(tx Tx) error {
 	return nil
 }
 
-func (s *State) Persist() error {
-	// Make a copy of mempool because the s.txMempool will be modified
-	// in the loop below
-	mempool := make([]Tx, len(s.txMempool))
-	copy(mempool, s.txMempool)
-	for i := 0; i < len(mempool); i++ {
-		txJson, err := json.Marshal(mempool[i])
-		if err != nil {
-			return err
-		}
-		if _, err = s.dbFile.Write(append(txJson, '\n')); err != nil {
-			return err
-		}
-		// Remove the TX written to a file from the mempool
-		s.txMempool = s.txMempool[1:]
+func (s *State) Persist() (Hash, error) {
+	// Create a new Block with ONLY the new TXs
+	block := NewBlock(
+		s.latestBlockHash,
+		uint64(time.Now().Unix()),
+		s.txMempool,
+	)
+
+	blockHash, err := block.Hash()
+	if err != nil {
+		return Hash{}, err
 	}
-	return nil
+
+	blockFs := BlockFS{blockHash, block}
+
+	blockFsJson, err := json.Marshal(blockFs)
+	if err != nil {
+		return Hash{}, err
+	}
+
+	fmt.Printf("Persisting new Block to disk:\n")
+	fmt.Printf("\t%s\n", blockFsJson)
+
+	// Write it to the DB file on a new line
+	_, err = s.dbFile.Write(append(blockFsJson, '\n'))
+	if err != nil {
+		return Hash{}, err
+	}
+	s.latestBlockHash = blockHash
+
+	// Reset the mempool
+	s.txMempool = []Tx{}
+	return s.latestBlockHash, nil
 }
 
 func (s *State) Close() {
 	s.dbFile.Close()
+}
+
+func (s *State) LatestBlockHash() Hash {
+	return s.latestBlockHash
+}
+
+func (s *State) doSnapshot() error {
+	// Re-read the whole file from the first byte
+	_, err := s.dbFile.Seek(0, 0)
+	if err != nil {
+		return err
+	}
+	txsData, err := io.ReadAll(s.dbFile)
+	if err != nil {
+		return err
+	}
+	s.latestBlockHash = sha256.Sum256(txsData)
+	return nil
 }
