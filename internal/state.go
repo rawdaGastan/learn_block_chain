@@ -2,10 +2,8 @@ package internal
 
 import (
 	"bufio"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -35,7 +33,7 @@ func NewStateFromDisk() (*State, error) {
 
 	}
 
-	txDbFilePath := filepath.Join(cwd, "database", "tx.db")
+	txDbFilePath := filepath.Join(cwd, "database", "block.db")
 	f, err := os.OpenFile(txDbFilePath, os.O_APPEND|os.O_RDWR, 0600)
 	if err != nil {
 		return nil, err
@@ -43,24 +41,25 @@ func NewStateFromDisk() (*State, error) {
 	scanner := bufio.NewScanner(f)
 	state := &State{balances, make([]Tx, 0), f, Hash{}}
 
-	// Iterate over each the tx.db file's line
+	// Iterate over each the block.db file's line
 	for scanner.Scan() {
 		if err := scanner.Err(); err != nil {
 			return nil, err
 		}
-		// Convert JSON encoded TX into an object (struct)
-		var tx Tx
-		json.Unmarshal(scanner.Bytes(), &tx)
-		// Rebuild the state (user balances),
-		// as a series of events
-		if err := state.apply(tx); err != nil {
+
+		blockFsJson := scanner.Bytes()
+		var blockFs BlockFS
+		err = json.Unmarshal(blockFsJson, &blockFs)
+		if err != nil {
 			return nil, err
 		}
-	}
 
-	err = state.doSnapshot()
-	if err != nil {
-		return nil, err
+		err = state.applyBlock(blockFs.Value)
+		if err != nil {
+			return nil, err
+		}
+
+		state.latestBlockHash = blockFs.Key
 	}
 
 	return state, nil
@@ -79,10 +78,31 @@ func (s *State) apply(tx Tx) error {
 	return nil
 }
 
-func (s *State) Add(tx Tx) error {
+func (s *State) applyBlock(b Block) error {
+	for _, tx := range b.TXs {
+		if err := s.apply(tx); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *State) AddBlock(b Block) error {
+	for _, tx := range b.TXs {
+		if err := s.AddTx(tx); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *State) AddTx(tx Tx) error {
 	if err := s.apply(tx); err != nil {
 		return err
 	}
+
 	s.txMempool = append(s.txMempool, tx)
 	return nil
 }
@@ -128,18 +148,4 @@ func (s *State) Close() {
 
 func (s *State) LatestBlockHash() Hash {
 	return s.latestBlockHash
-}
-
-func (s *State) doSnapshot() error {
-	// Re-read the whole file from the first byte
-	_, err := s.dbFile.Seek(0, 0)
-	if err != nil {
-		return err
-	}
-	txsData, err := io.ReadAll(s.dbFile)
-	if err != nil {
-		return err
-	}
-	s.latestBlockHash = sha256.Sum256(txsData)
-	return nil
 }
