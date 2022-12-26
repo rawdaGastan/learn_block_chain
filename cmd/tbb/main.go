@@ -11,13 +11,8 @@ import (
 const flagKeystoreFile = "keystore"
 const flagDataDir = "datadir"
 const flagMiner = "miner"
-const flagSSLEmail = "ssl-email"
-const flagDisableSSL = "disable-ssl"
-const flagIP = "ip"
 const flagPort = "port"
-const flagBootstrapAcc = "bootstrap-account"
-const flagBootstrapIp = "bootstrap-ip"
-const flagBootstrapPort = "bootstrap-port"
+const flagIP = "ip"
 
 func main() {
 	var tbbCmd = &cobra.Command{
@@ -29,8 +24,8 @@ func main() {
 
 	tbbCmd.AddCommand(versionCmd)
 	tbbCmd.AddCommand(balancesCmd())
-	tbbCmd.AddCommand(txCmd())
 	tbbCmd.AddCommand(runCmd())
+	tbbCmd.AddCommand(migrateCmd())
 
 	err := tbbCmd.Execute()
 	if err != nil {

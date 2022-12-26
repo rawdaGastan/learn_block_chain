@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"reflect"
-	"time"
 )
 
 type State struct {
@@ -19,7 +18,7 @@ type State struct {
 }
 
 func NewStateFromDisk(dataDir string) (*State, error) {
-	err := InitDataDirIfNotExists(dataDir)
+	err := initDataDirIfNotExists(dataDir)
 	if err != nil {
 		return nil, err
 	}
@@ -28,10 +27,10 @@ func NewStateFromDisk(dataDir string) (*State, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	balances := make(map[Account]uint)
 	for account, balance := range gen.Balances {
 		balances[account] = balance
-
 	}
 
 	dbFilepath := getBlocksDbFilePath(dataDir)
@@ -41,54 +40,37 @@ func NewStateFromDisk(dataDir string) (*State, error) {
 	}
 
 	scanner := bufio.NewScanner(f)
+
 	state := &State{balances, make([]Tx, 0), f, Hash{}, Block{}, false}
 
-	// Iterate over each the block.db file's line
 	for scanner.Scan() {
 		if err := scanner.Err(); err != nil {
 			return nil, err
 		}
 
 		blockFsJson := scanner.Bytes()
+
+		if len(blockFsJson) == 0 {
+			break
+		}
+
 		var blockFs BlockFS
 		err = json.Unmarshal(blockFsJson, &blockFs)
 		if err != nil {
 			return nil, err
 		}
 
-		err = state.applyBlock(blockFs.Value)
+		err = applyTXs(blockFs.Value.TXs, state)
 		if err != nil {
 			return nil, err
 		}
 
-		state.latestBlockHash = blockFs.Key
 		state.latestBlock = blockFs.Value
+		state.latestBlockHash = blockFs.Key
+		state.hasGenesisBlock = true
 	}
 
 	return state, nil
-}
-
-func (s *State) apply(tx Tx) error {
-	if tx.IsReward() {
-		s.Balances[tx.To] += tx.Value
-		return nil
-	}
-	if tx.Value > s.Balances[tx.From] {
-		return fmt.Errorf("insufficient balance")
-	}
-	s.Balances[tx.From] -= tx.Value
-	s.Balances[tx.To] += tx.Value
-	return nil
-}
-
-func (s *State) applyBlock(b Block) error {
-	for _, tx := range b.TXs {
-		if err := s.apply(tx); err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
 func (s *State) AddBlocks(blocks []Block) error {
@@ -154,19 +136,6 @@ func applyBlock(b Block, s State) error {
 	return applyTXs(b.TXs, &s)
 }
 
-func (s *State) NextBlockNumber() uint64 {
-	return s.latestBlock.Header.Number
-}
-
-func (s *State) AddTx(tx Tx) error {
-	if err := s.apply(tx); err != nil {
-		return err
-	}
-
-	s.txMempool = append(s.txMempool, tx)
-	return nil
-}
-
 func applyTXs(txs []Tx, s *State) error {
 	for _, tx := range txs {
 		err := applyTx(tx, s)
@@ -194,44 +163,16 @@ func applyTx(tx Tx, s *State) error {
 	return nil
 }
 
-func (s *State) Persist() (Hash, error) {
-	// Create a new Block with ONLY the new TXs
-	block := NewBlock(
-		s.latestBlockHash,
-		uint64(time.Now().Unix()),
-		s.latestBlock.Header.Number+1,
-		s.txMempool,
-	)
-
-	blockHash, err := block.Hash()
-	if err != nil {
-		return Hash{}, err
-	}
-
-	blockFs := BlockFS{blockHash, block}
-
-	blockFsJson, err := json.Marshal(blockFs)
-	if err != nil {
-		return Hash{}, err
-	}
-
-	fmt.Printf("Persisting new Block to disk:\n")
-	fmt.Printf("\t%s\n", blockFsJson)
-
-	// Write it to the DB file on a new line
-	_, err = s.dbFile.Write(append(blockFsJson, '\n'))
-	if err != nil {
-		return Hash{}, err
-	}
-	s.latestBlockHash = blockHash
-
-	// Reset the mempool
-	s.txMempool = []Tx{}
-	return s.latestBlockHash, nil
-}
-
 func (s *State) Close() {
 	s.dbFile.Close()
+}
+
+func (s *State) NextBlockNumber() uint64 {
+	if !s.hasGenesisBlock {
+		return uint64(0)
+	}
+
+	return s.LatestBlock().Header.Number + 1
 }
 
 func (s *State) LatestBlockHash() Hash {

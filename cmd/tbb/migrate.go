@@ -1,11 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/rawdaGastan/learn_block_chain/internal"
+	"github.com/rawdaGastan/learn_block_chain/node"
 	"github.com/spf13/cobra"
 )
 
@@ -14,67 +15,58 @@ var migrateCmd = func() *cobra.Command {
 		Use:   "migrate",
 		Short: "Migrates the blockchain internal according to new business rules.",
 		Run: func(cmd *cobra.Command, args []string) {
-			state, err := internal.NewStateFromDisk(getDataDirFromCmd(cmd))
-			if err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				os.Exit(1)
-			}
-			defer state.Close()
+			miner, _ := cmd.Flags().GetString(flagMiner)
+			ip, _ := cmd.Flags().GetString(flagIP)
+			port, _ := cmd.Flags().GetUint64(flagPort)
 
-			block0 := internal.NewBlock(
-				internal.Hash{},
-				state.NextBlockNumber(),
-				uint64(time.Now().Unix()),
-				[]internal.Tx{
-					internal.NewTx("andrej", "andrej", 3, ""),
-					internal.NewTx("andrej", "andrej", 700, "reward"),
-				},
+			peer := node.NewPeerNode(
+				ip,
+				defaultPort,
+				true,
+				false,
+				internal.NewAccount("rawda"),
 			)
 
-			block0hash, err := state.AddBlock(block0)
+			n := node.New(getDataDirFromCmd(cmd), ip, port, internal.NewAccount(miner), peer)
+
+			n.AddPendingTX(internal.NewTx("rawda", "rawda", 3, ""), peer)
+			n.AddPendingTX(internal.NewTx("rawda", "babayaga", 2000, ""), peer)
+			n.AddPendingTX(internal.NewTx("babayaga", "rawda", 1, ""), peer)
+			n.AddPendingTX(internal.NewTx("babayaga", "caesar", 1000, ""), peer)
+			n.AddPendingTX(internal.NewTx("babayaga", "rawda", 50, ""), peer)
+
+			ctx, closeNode := context.WithTimeout(context.Background(), time.Minute*15)
+
+			go func() {
+				ticker := time.NewTicker(time.Second * 10)
+
+				for {
+					select {
+					case <-ticker.C:
+						if !n.LatestBlockHash().IsEmpty() {
+							closeNode()
+							return
+						}
+					}
+				}
+			}()
+
+			err := n.Run(ctx)
 			if err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				os.Exit(1)
+				fmt.Println(err)
 			}
 
-			block1 := internal.NewBlock(
-				block0hash,
-				state.NextBlockNumber(),
-				uint64(time.Now().Unix()),
-				[]internal.Tx{
-					internal.NewTx("andrej", "babayaga", 2000, ""),
-					internal.NewTx("andrej", "andrej", 100, "reward"),
-					internal.NewTx("babayaga", "andrej", 1, ""),
-					internal.NewTx("babayaga", "caesar", 1000, ""),
-					internal.NewTx("babayaga", "andrej", 50, ""),
-					internal.NewTx("andrej", "andrej", 600, "reward"),
-				},
-			)
-
-			block1hash, err := state.AddBlock(block1)
-			if err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				os.Exit(1)
-			}
-
-			block2 := internal.NewBlock(
-				block1hash,
-				state.NextBlockNumber(),
-				uint64(time.Now().Unix()),
-				[]internal.Tx{
-					internal.NewTx("andrej", "andrej", 24700, "reward"),
-				},
-			)
-
-			_, err = state.AddBlock(block2)
-			if err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				os.Exit(1)
-			}
 		},
 	}
 
 	addDefaultRequiredFlags(migrateCmd)
+	migrateCmd.Flags().String(flagMiner, "", "miner account")
+	migrateCmd.MarkFlagRequired(flagMiner)
+
+	migrateCmd.Flags().Uint64(flagPort, 8080, "port")
+	migrateCmd.MarkFlagRequired(flagPort)
+
+	migrateCmd.Flags().String(flagIP, "127.0.0.1", "ip")
 
 	return migrateCmd
 }

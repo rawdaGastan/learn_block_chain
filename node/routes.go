@@ -1,75 +1,14 @@
-// Copyright 2020 The the-blockchain-bar Authors
-// This file is part of the the-blockchain-bar library.
-//
-// The the-blockchain-bar library is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Lesser General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// The the-blockchain-bar library is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU Lesser General Public License for more details.
-//
-// You should have received a copy of the GNU Lesser General Public License
-// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 package node
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
-	"strings"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/rawdaGastan/learn_block_chain/internal"
 )
 
-type ErrRes struct {
-	Error string `json:"error"`
-}
-
-type BalancesRes struct {
-	Hash     internal.Hash           `json:"block_hash"`
-	Balances map[common.Address]uint `json:"balances"`
-}
-
-type TxAddReq struct {
-	From     string `json:"from"`
-	FromPwd  string `json:"from_pwd"`
-	To       string `json:"to"`
-	Gas      uint   `json:"gas"`
-	GasPrice uint   `json:"gasPrice"`
-	Value    uint   `json:"value"`
-	Data     string `json:"data"`
-}
-
-type TxAddRes struct {
-	Success bool `json:"success"`
-}
-
-type StatusRes struct {
-	Hash        internal.Hash       `json:"block_hash"`
-	Number      uint64              `json:"block_number"`
-	KnownPeers  map[string]PeerNode `json:"peers_known"`
-	PendingTXs  []internal.SignedTx `json:"pending_txs"`
-	NodeVersion string              `json:"node_version"`
-	Account     common.Address      `json:"account"`
-}
-
-type SyncRes struct {
-	Blocks []internal.Block `json:"blocks"`
-}
-
-type AddPeerRes struct {
-	Success bool   `json:"success"`
-	Error   string `json:"error"`
-}
-
 func listBalancesHandler(w http.ResponseWriter, r *http.Request, state *internal.State) {
-	enableCors(&w)
-
 	writeRes(w, BalancesRes{state.LatestBlockHash(), state.Balances})
 }
 
@@ -81,28 +20,8 @@ func txAddHandler(w http.ResponseWriter, r *http.Request, node *Node) {
 		return
 	}
 
-	from := internal.NewAccount(req.From)
-
-	if from.String() == common.HexToAddress("").String() {
-		writeErrRes(w, fmt.Errorf("%s is an invalid 'from' sender", from.String()))
-		return
-	}
-
-	if req.FromPwd == "" {
-		writeErrRes(w, fmt.Errorf("password to decrypt the %s account is required. 'from_pwd' is empty", from.String()))
-		return
-	}
-
-	nonce := node.state.GetNextAccountNonce(from)
-	tx := internal.NewTx(from, internal.NewAccount(req.To), req.Gas, req.GasPrice, req.Value, nonce, req.Data)
-
-	signedTx, err := wallet.SignTxWithKeystoreAccount(tx, from, req.FromPwd, wallet.GetKeystoreDirPath(node.dataDir))
-	if err != nil {
-		writeErrRes(w, err)
-		return
-	}
-
-	err = node.AddPendingTX(signedTx, node.info)
+	tx := internal.NewTx(internal.NewAccount(req.From), internal.NewAccount(req.To), req.Value, req.Data)
+	err = node.AddPendingTX(tx, node.info)
 	if err != nil {
 		writeErrRes(w, err)
 		return
@@ -112,30 +31,27 @@ func txAddHandler(w http.ResponseWriter, r *http.Request, node *Node) {
 }
 
 func statusHandler(w http.ResponseWriter, r *http.Request, node *Node) {
-	enableCors(&w)
-
 	res := StatusRes{
-		Hash:        node.state.LatestBlockHash(),
-		Number:      node.state.LatestBlock().Header.Number,
-		KnownPeers:  node.knownPeers,
-		PendingTXs:  node.getPendingTXsAsArray(),
-		NodeVersion: node.nodeVersion,
-		Account:     internal.NewAccount(node.info.Account.String()),
+		Hash:       node.state.LatestBlockHash(),
+		Number:     node.state.LatestBlock().Header.Number,
+		KnownPeers: node.knownPeers,
+		PendingTXs: node.getPendingTXsAsArray(),
 	}
 
 	writeRes(w, res)
 }
 
 func syncHandler(w http.ResponseWriter, r *http.Request, node *Node) {
-	reqHash := r.URL.Query().Get(endpointSyncQueryKeyFromBlock)
-
+	// What's your latest block?
+	// I will check my state, if I have newer blocks
+	reqHash := r.URL.Query().Get("fromBlock")
 	hash := internal.Hash{}
 	err := hash.UnmarshalText([]byte(reqHash))
 	if err != nil {
 		writeErrRes(w, err)
 		return
 	}
-
+	// Read newer blocks from the DB
 	blocks, err := internal.GetBlocksAfter(hash, node.dataDir)
 	if err != nil {
 		writeErrRes(w, err)
@@ -146,53 +62,20 @@ func syncHandler(w http.ResponseWriter, r *http.Request, node *Node) {
 }
 
 func addPeerHandler(w http.ResponseWriter, r *http.Request, node *Node) {
-	peerIP := r.URL.Query().Get(endpointAddPeerQueryKeyIP)
-	peerPortRaw := r.URL.Query().Get(endpointAddPeerQueryKeyPort)
-	minerRaw := r.URL.Query().Get(endpointAddPeerQueryKeyMiner)
-	versionRaw := r.URL.Query().Get(endpointAddPeerQueryKeyVersion)
-
+	peerIP := r.URL.Query().Get("ip")
+	peerPortRaw := r.URL.Query().Get("port")
+	minerRaw := r.URL.Query().Get("miner")
 	peerPort, err := strconv.ParseUint(peerPortRaw, 10, 32)
 	if err != nil {
 		writeRes(w, AddPeerRes{false, err.Error()})
 		return
 	}
 
-	peer := NewPeerNode(peerIP, peerPort, false, internal.NewAccount(minerRaw), true, versionRaw)
+	peer := NewPeerNode(peerIP, peerPort, false, true, internal.NewAccount(minerRaw))
 
 	node.AddPeer(peer)
 
 	fmt.Printf("Peer '%s' was added into KnownPeers\n", peer.TcpAddress())
 
 	writeRes(w, AddPeerRes{true, ""})
-}
-
-func blockByNumberOrHash(w http.ResponseWriter, r *http.Request, node *Node) {
-	enableCors(&w)
-
-	errorParamsRequired := errors.New("height or hash param is required")
-
-	params := strings.Split(r.URL.Path, "/")[1:]
-	if len(params) < 2 {
-		writeErrRes(w, errorParamsRequired)
-		return
-	}
-
-	p := strings.TrimSpace(params[1])
-	if len(p) == 0 {
-		writeErrRes(w, errorParamsRequired)
-		return
-	}
-	hsh := ""
-	height, err := strconv.ParseUint(p, 10, 64)
-	if err != nil {
-		hsh = p
-	}
-
-	block, err := internal.GetBlockByHeightOrHash(node.state, height, hsh, node.dataDir)
-	if err != nil {
-		writeErrRes(w, err)
-		return
-	}
-
-	writeRes(w, block)
 }

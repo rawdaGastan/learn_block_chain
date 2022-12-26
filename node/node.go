@@ -1,15 +1,16 @@
 package node
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
+	"time"
 
 	"github.com/rawdaGastan/learn_block_chain/internal"
 )
 
-const DefaultHTTPort = 8080
+const miningIntervalSeconds = 10
 
 type PeerNode struct {
 	IP          string `json:"ip"`
@@ -18,73 +19,222 @@ type PeerNode struct {
 
 	// Whenever my node already established connection, sync with this Peer
 	connected bool
+	Account   internal.Account
 }
 
 type Node struct {
-	dataDir    string
-	port       uint64 // To inject the State into HTTP handlers
-	state      *internal.State
-	knownPeers []PeerNode
+	dataDir string
+	info    PeerNode
+
+	state           *internal.State
+	knownPeers      map[string]PeerNode
+	pendingTXs      map[string]internal.Tx
+	archivedTXs     map[string]internal.Tx
+	newSyncedBlocks chan internal.Block
+	newPendingTXs   chan internal.Tx
+	isMining        bool
 }
 
-func New(dataDir string, port uint64, bootstrap PeerNode) *Node {
+func New(dataDir string, ip string, port uint64, acc internal.Account, bootstrap PeerNode) *Node {
+	knownPeers := make(map[string]PeerNode)
+	knownPeers[bootstrap.TcpAddress()] = bootstrap
+
 	return &Node{
-		dataDir:    dataDir,
-		port:       port,
-		knownPeers: []PeerNode{bootstrap},
+		dataDir:         dataDir,
+		info:            NewPeerNode(ip, port, false, true, acc),
+		knownPeers:      knownPeers,
+		pendingTXs:      make(map[string]internal.Tx),
+		archivedTXs:     make(map[string]internal.Tx),
+		newSyncedBlocks: make(chan internal.Block),
+		newPendingTXs:   make(chan internal.Tx, 10000),
+		isMining:        false,
 	}
 }
 
-func (n *Node) Run() error {
-	fmt.Println(fmt.Sprintf("Listening on HTTP port: %d", n.port))
+func (pn PeerNode) TcpAddress() string {
+	return fmt.Sprintf("%s:%d", pn.IP, pn.Port)
+}
+
+func NewPeerNode(ip string, port uint64, isBootstrap bool, connected bool, miner internal.Account) PeerNode {
+	return PeerNode{ip, port, isBootstrap, connected, miner}
+}
+
+func (n *Node) Run(ctx context.Context) error {
+	fmt.Printf("Listening on: %s:%d\n", n.info.IP, n.info.Port)
+
 	state, err := internal.NewStateFromDisk(n.dataDir)
 	if err != nil {
 		return err
 	}
 	defer state.Close()
 	n.state = state
+
+	// Run sync() in a separate thread
+	go n.sync(ctx)
+	go n.mine(ctx)
+
 	http.HandleFunc("/balances/list", func(w http.ResponseWriter, r *http.Request) {
 		listBalancesHandler(w, r, state)
 	})
 	http.HandleFunc("/tx/add", func(w http.ResponseWriter, r *http.Request) {
-		txAddHandler(w, r, state)
+		txAddHandler(w, r, n)
 	})
 	http.HandleFunc("/node/status", func(w http.ResponseWriter, r *http.Request) {
 		statusHandler(w, r, n)
 	})
-	return http.ListenAndServe(fmt.Sprintf(":%d", n.port), nil)
-}
+	http.HandleFunc("/node/sync", func(w http.ResponseWriter, r *http.Request) {
+		syncHandler(w, r, n)
+	})
+	http.HandleFunc("/node/peer", func(w http.ResponseWriter, r *http.Request) {
+		addPeerHandler(w, r, n)
+	})
 
-func writeErrRes(w http.ResponseWriter, err error) {
-	jsonErrRes, _ := json.Marshal(ErrRes{err.Error()})
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusInternalServerError)
-	w.Write(jsonErrRes)
-}
+	server := &http.Server{Addr: fmt.Sprintf(":%d", n.info.Port)}
 
-func writeRes(w http.ResponseWriter, content interface{}) {
-	contentJson, err := json.Marshal(content)
-	if err != nil {
-		writeErrRes(w, err)
-		return
-	}
+	go func() {
+		<-ctx.Done()
+		_ = server.Close()
+	}()
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	w.Write(contentJson)
-}
-
-func readReq(r *http.Request, reqBody interface{}) error {
-	reqBodyJson, err := io.ReadAll(r.Body)
-	if err != nil {
-		return fmt.Errorf("unable to read request body. %s", err.Error())
-	}
-	defer r.Body.Close()
-
-	err = json.Unmarshal(reqBodyJson, reqBody)
-	if err != nil {
-		return fmt.Errorf("unable to unmarshal request body. %s", err.Error())
+	err = server.ListenAndServe()
+	if err != http.ErrServerClosed {
+		return err
 	}
 
 	return nil
+}
+
+func (n *Node) mine(ctx context.Context) error {
+	var miningCtx context.Context
+	var stopCurrentMining context.CancelFunc
+
+	ticker := time.NewTicker(time.Second * miningIntervalSeconds)
+
+	for {
+		select {
+		case <-ticker.C:
+			go func() {
+				if len(n.pendingTXs) > 0 && !n.isMining {
+					n.isMining = true
+
+					miningCtx, stopCurrentMining = context.WithCancel(ctx)
+					err := n.minePendingTXs(miningCtx)
+					if err != nil {
+						fmt.Printf("ERROR: %s\n", err)
+					}
+
+					n.isMining = false
+				}
+			}()
+
+		case block, _ := <-n.newSyncedBlocks:
+			if n.isMining {
+				blockHash, _ := block.Hash()
+				fmt.Printf("\nPeer mined next Block '%s' faster :(\n", blockHash.Hex())
+
+				n.removeMinedPendingTXs(block)
+				stopCurrentMining()
+			}
+
+		case <-ctx.Done():
+			ticker.Stop()
+			return nil
+		}
+	}
+}
+
+func (n *Node) minePendingTXs(ctx context.Context) error {
+	blockToMine := NewPendingBlock(
+		n.state.LatestBlockHash(),
+		n.state.NextBlockNumber(),
+		n.info.Account,
+		n.getPendingTXsAsArray(),
+	)
+
+	minedBlock, err := Mine(ctx, blockToMine)
+	if err != nil {
+		return err
+	}
+
+	n.removeMinedPendingTXs(minedBlock)
+
+	_, err = n.state.AddBlock(minedBlock)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (n *Node) AddPendingTX(tx internal.Tx, fromPeer PeerNode) error {
+	txHash, err := tx.Hash()
+	if err != nil {
+		return err
+	}
+
+	txJson, err := json.Marshal(tx)
+	if err != nil {
+		return err
+	}
+
+	_, isAlreadyPending := n.pendingTXs[txHash.Hex()]
+	_, isArchived := n.archivedTXs[txHash.Hex()]
+
+	if !isAlreadyPending && !isArchived {
+		fmt.Printf("Added Pending TX %s from Peer %s\n", txJson, fromPeer.TcpAddress())
+		n.pendingTXs[txHash.Hex()] = tx
+		n.newPendingTXs <- tx
+	}
+
+	return nil
+}
+
+func (n *Node) getPendingTXsAsArray() []internal.Tx {
+	txs := make([]internal.Tx, len(n.pendingTXs))
+
+	i := 0
+	for _, tx := range n.pendingTXs {
+		txs[i] = tx
+		i++
+	}
+
+	return txs
+}
+
+func (n *Node) removeMinedPendingTXs(block internal.Block) {
+	if len(block.TXs) > 0 && len(n.pendingTXs) > 0 {
+		fmt.Println("Updating in-memory Pending TXs Pool:")
+	}
+
+	for _, tx := range block.TXs {
+		txHash, _ := tx.Hash()
+		if _, exists := n.pendingTXs[txHash.Hex()]; exists {
+			fmt.Printf("\t-archiving mined TX: %s\n", txHash.Hex())
+
+			n.archivedTXs[txHash.Hex()] = tx
+			delete(n.pendingTXs, txHash.Hex())
+		}
+	}
+}
+
+func (n *Node) LatestBlockHash() internal.Hash {
+	return n.state.LatestBlockHash()
+}
+
+func (n *Node) AddPeer(peer PeerNode) {
+	n.knownPeers[peer.TcpAddress()] = peer
+}
+
+func (n *Node) RemovePeer(peer PeerNode) {
+	delete(n.knownPeers, peer.TcpAddress())
+}
+
+func (n *Node) IsKnownPeer(peer PeerNode) bool {
+	if peer.IP == n.info.IP && peer.Port == n.info.Port {
+		return true
+	}
+
+	_, isKnownPeer := n.knownPeers[peer.TcpAddress()]
+
+	return isKnownPeer
 }

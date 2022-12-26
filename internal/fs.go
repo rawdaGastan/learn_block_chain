@@ -1,7 +1,6 @@
 package internal
 
 import (
-	"io/ioutil"
 	"os"
 	"os/user"
 	"path"
@@ -9,7 +8,7 @@ import (
 	"strings"
 )
 
-func InitDataDirIfNotExists(dataDir string) error {
+func initDataDirIfNotExists(dataDir string) error {
 	if fileExist(getGenesisJsonFilePath(dataDir)) {
 		return nil
 	}
@@ -60,7 +59,7 @@ func dirExists(path string) (bool, error) {
 }
 
 func writeEmptyBlocksDbToDisk(path string) error {
-	return ioutil.WriteFile(path, []byte(""), os.ModePerm)
+	return os.WriteFile(path, []byte(""), os.ModePerm)
 }
 
 // Expands a file path
