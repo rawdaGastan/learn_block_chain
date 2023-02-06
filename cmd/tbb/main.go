@@ -26,6 +26,7 @@ func main() {
 	tbbCmd.AddCommand(balancesCmd())
 	tbbCmd.AddCommand(runCmd())
 	tbbCmd.AddCommand(migrateCmd())
+	tbbCmd.AddCommand(walletCmd())
 
 	err := tbbCmd.Execute()
 	if err != nil {

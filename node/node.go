@@ -7,10 +7,12 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/rawdaGastan/learn_block_chain/internal"
 )
 
 const miningIntervalSeconds = 10
+const DefaultMiner = "0x0000000000000000000000000000000000000000"
 
 type PeerNode struct {
 	IP          string `json:"ip"`
@@ -19,7 +21,7 @@ type PeerNode struct {
 
 	// Whenever my node already established connection, sync with this Peer
 	connected bool
-	Account   internal.Account
+	Account   common.Address
 }
 
 type Node struct {
@@ -28,14 +30,14 @@ type Node struct {
 
 	state           *internal.State
 	knownPeers      map[string]PeerNode
-	pendingTXs      map[string]internal.Tx
-	archivedTXs     map[string]internal.Tx
+	pendingTXs      map[string]internal.SignedTx
+	archivedTXs     map[string]internal.SignedTx
 	newSyncedBlocks chan internal.Block
-	newPendingTXs   chan internal.Tx
+	newPendingTXs   chan internal.SignedTx
 	isMining        bool
 }
 
-func New(dataDir string, ip string, port uint64, acc internal.Account, bootstrap PeerNode) *Node {
+func New(dataDir string, ip string, port uint64, acc common.Address, bootstrap PeerNode) *Node {
 	knownPeers := make(map[string]PeerNode)
 	knownPeers[bootstrap.TcpAddress()] = bootstrap
 
@@ -43,10 +45,10 @@ func New(dataDir string, ip string, port uint64, acc internal.Account, bootstrap
 		dataDir:         dataDir,
 		info:            NewPeerNode(ip, port, false, true, acc),
 		knownPeers:      knownPeers,
-		pendingTXs:      make(map[string]internal.Tx),
-		archivedTXs:     make(map[string]internal.Tx),
+		pendingTXs:      make(map[string]internal.SignedTx),
+		archivedTXs:     make(map[string]internal.SignedTx),
 		newSyncedBlocks: make(chan internal.Block),
-		newPendingTXs:   make(chan internal.Tx, 10000),
+		newPendingTXs:   make(chan internal.SignedTx, 10000),
 		isMining:        false,
 	}
 }
@@ -55,7 +57,7 @@ func (pn PeerNode) TcpAddress() string {
 	return fmt.Sprintf("%s:%d", pn.IP, pn.Port)
 }
 
-func NewPeerNode(ip string, port uint64, isBootstrap bool, connected bool, miner internal.Account) PeerNode {
+func NewPeerNode(ip string, port uint64, isBootstrap bool, connected bool, miner common.Address) PeerNode {
 	return PeerNode{ip, port, isBootstrap, connected, miner}
 }
 
@@ -127,7 +129,7 @@ func (n *Node) mine(ctx context.Context) error {
 				}
 			}()
 
-		case block, _ := <-n.newSyncedBlocks:
+		case block := <-n.newSyncedBlocks:
 			if n.isMining {
 				blockHash, _ := block.Hash()
 				fmt.Printf("\nPeer mined next Block '%s' faster :(\n", blockHash.Hex())
@@ -166,7 +168,7 @@ func (n *Node) minePendingTXs(ctx context.Context) error {
 	return nil
 }
 
-func (n *Node) AddPendingTX(tx internal.Tx, fromPeer PeerNode) error {
+func (n *Node) AddPendingTX(tx internal.SignedTx, fromPeer PeerNode) error {
 	txHash, err := tx.Hash()
 	if err != nil {
 		return err
@@ -189,8 +191,8 @@ func (n *Node) AddPendingTX(tx internal.Tx, fromPeer PeerNode) error {
 	return nil
 }
 
-func (n *Node) getPendingTXsAsArray() []internal.Tx {
-	txs := make([]internal.Tx, len(n.pendingTXs))
+func (n *Node) getPendingTXsAsArray() []internal.SignedTx {
+	txs := make([]internal.SignedTx, len(n.pendingTXs))
 
 	i := 0
 	for _, tx := range n.pendingTXs {

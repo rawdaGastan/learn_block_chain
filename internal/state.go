@@ -6,19 +6,23 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+
+	"github.com/ethereum/go-ethereum/common"
 )
 
 type State struct {
-	Balances        map[Account]uint
-	txMempool       []Tx
-	dbFile          *os.File
-	latestBlockHash Hash
+	Balances      map[common.Address]uint
+	Account2Nonce map[common.Address]uint
+
+	dbFile *os.File
+
 	latestBlock     Block
+	latestBlockHash Hash
 	hasGenesisBlock bool
 }
 
 func NewStateFromDisk(dataDir string) (*State, error) {
-	err := initDataDirIfNotExists(dataDir)
+	err := InitDataDirIfNotExists(dataDir, []byte(genesisJson))
 	if err != nil {
 		return nil, err
 	}
@@ -28,10 +32,12 @@ func NewStateFromDisk(dataDir string) (*State, error) {
 		return nil, err
 	}
 
-	balances := make(map[Account]uint)
+	balances := make(map[common.Address]uint)
 	for account, balance := range gen.Balances {
 		balances[account] = balance
 	}
+
+	account2nonce := make(map[common.Address]uint)
 
 	dbFilepath := getBlocksDbFilePath(dataDir)
 	f, err := os.OpenFile(dbFilepath, os.O_APPEND|os.O_RDWR, 0600)
@@ -41,7 +47,7 @@ func NewStateFromDisk(dataDir string) (*State, error) {
 
 	scanner := bufio.NewScanner(f)
 
-	state := &State{balances, make([]Tx, 0), f, Hash{}, Block{}, false}
+	state := &State{balances, account2nonce, f, Block{}, Hash{}, false}
 
 	for scanner.Scan() {
 		if err := scanner.Err(); err != nil {
@@ -87,7 +93,7 @@ func (s *State) AddBlocks(blocks []Block) error {
 func (s *State) AddBlock(b Block) (Hash, error) {
 	pendingState := s.copy()
 
-	err := applyBlock(b, pendingState)
+	err := applyBlock(b, &pendingState)
 	if err != nil {
 		return Hash{}, err
 	}
@@ -121,8 +127,9 @@ func (s *State) AddBlock(b Block) (Hash, error) {
 }
 
 // applyBlock verifies if block can be added to the blockchain.
+//
 // Block metadata are verified as well as transactions within (sufficient balances, etc).
-func applyBlock(b Block, s State) error {
+func applyBlock(b Block, s *State) error {
 	nextExpectedBlockNumber := s.latestBlock.Header.Number + 1
 
 	if s.hasGenesisBlock && b.Header.Number != nextExpectedBlockNumber {
@@ -133,10 +140,26 @@ func applyBlock(b Block, s State) error {
 		return fmt.Errorf("next block parent hash must be '%x' not '%x'", s.latestBlockHash, b.Header.Parent)
 	}
 
-	return applyTXs(b.TXs, &s)
+	hash, err := b.Hash()
+	if err != nil {
+		return err
+	}
+
+	if !IsBlockHashValid(hash) {
+		return fmt.Errorf("invalid block hash %x", hash)
+	}
+
+	err = applyTXs(b.TXs, s)
+	if err != nil {
+		return err
+	}
+
+	s.Balances[b.Header.Miner] += BlockReward
+
+	return nil
 }
 
-func applyTXs(txs []Tx, s *State) error {
+func applyTXs(txs []SignedTx, s *State) error {
 	for _, tx := range txs {
 		err := applyTx(tx, s)
 		if err != nil {
@@ -147,18 +170,29 @@ func applyTXs(txs []Tx, s *State) error {
 	return nil
 }
 
-func applyTx(tx Tx, s *State) error {
-	if tx.IsReward() {
-		s.Balances[tx.To] += tx.Value
-		return nil
+func applyTx(tx SignedTx, s *State) error {
+	ok, err := tx.IsAuthentic()
+	if err != nil {
+		return err
+	}
+
+	if !ok {
+		return fmt.Errorf("wrong TX. Sender '%s' is forged", tx.From.String())
+	}
+
+	expectedNonce := s.GetNextAccountNonce(tx.From)
+	if tx.Nonce != expectedNonce {
+		return fmt.Errorf("wrong TX. Sender '%s' next nonce must be '%d', not '%d'", tx.From.String(), expectedNonce, tx.Nonce)
 	}
 
 	if tx.Value > s.Balances[tx.From] {
-		return fmt.Errorf("wrong TX. Sender '%s' balance is %d TBB. Tx cost is %d TBB", tx.From, s.Balances[tx.From], tx.Value)
+		return fmt.Errorf("wrong TX. Sender '%s' balance is %d TBB. Tx cost is %d TBB", tx.From.String(), s.Balances[tx.From], tx.Value)
 	}
 
 	s.Balances[tx.From] -= tx.Value
 	s.Balances[tx.To] += tx.Value
+
+	s.Account2Nonce[tx.From] = tx.Nonce
 
 	return nil
 }
@@ -188,14 +222,20 @@ func (s *State) copy() State {
 	c.hasGenesisBlock = s.hasGenesisBlock
 	c.latestBlock = s.latestBlock
 	c.latestBlockHash = s.latestBlockHash
-	c.txMempool = make([]Tx, len(s.txMempool))
-	c.Balances = make(map[Account]uint)
+	c.Balances = make(map[common.Address]uint)
+	c.Account2Nonce = make(map[common.Address]uint)
 
 	for acc, balance := range s.Balances {
 		c.Balances[acc] = balance
 	}
 
-	c.txMempool = append(c.txMempool, s.txMempool...)
+	for acc, nonce := range s.Account2Nonce {
+		c.Account2Nonce[acc] = nonce
+	}
 
 	return c
+}
+
+func (s *State) GetNextAccountNonce(account common.Address) uint {
+	return s.Account2Nonce[account] + 1
 }

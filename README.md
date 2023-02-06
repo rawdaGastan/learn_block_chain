@@ -6,7 +6,7 @@ This is the code example for Lukas Lukac build a Blockchain from Scratch in Go b
 
 :mag: Find the repository [here](https://github.com/web3coach/the-blockchain-bar)
 
-:pushpin: Fine the tutorial [here](https://www.freecodecamp.org/news/build-a-blockchain-in-golang-from-scratch/)
+:pushpin: Find the tutorial [here](https://www.freecodecamp.org/news/build-a-blockchain-in-golang-from-scratch/)
 
 ## Install
 
@@ -18,3 +18,9 @@ This is the code example for Lukas Lukac build a Blockchain from Scratch in Go b
 - `tbb balances list`
 - `tbb migrate --datadir=data`
 - `tbb run --port=8080 --datadir=data`
+
+## Testing
+
+- `go test -timeout=0 -count=1 ./node -test.v -test.run ^TestNode_Mining$`
+- `go test -timeout=0 -count=1 ./node -test.v -test.run ^TestNode_MiningStopsOnNewSyncedBlock$`
+- `go test ./node -timeout=0 -test.v -test.run ^TestNode_ForgedTx$`

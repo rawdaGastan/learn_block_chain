@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/rawdaGastan/learn_block_chain/internal"
 )
 
@@ -13,11 +14,11 @@ type PendingBlock struct {
 	parent internal.Hash
 	number uint64
 	time   uint64
-	miner  internal.Account
-	txs    []internal.Tx
+	miner  common.Address
+	txs    []internal.SignedTx
 }
 
-func NewPendingBlock(parent internal.Hash, number uint64, miner internal.Account, txs []internal.Tx) PendingBlock {
+func NewPendingBlock(parent internal.Hash, number uint64, miner common.Address, txs []internal.SignedTx) PendingBlock {
 	return PendingBlock{parent, number, uint64(time.Now().Unix()), miner, txs}
 }
 

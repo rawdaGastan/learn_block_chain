@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/rawdaGastan/learn_block_chain/internal"
 )
 
@@ -24,8 +25,8 @@ type ErrRes struct {
 }
 
 type BalancesRes struct {
-	Hash     internal.Hash             `json:"block_hash"`
-	Balances map[internal.Account]uint `json:"balances"`
+	Hash     internal.Hash           `json:"block_hash"`
+	Balances map[common.Address]uint `json:"balances"`
 }
 
 type TxAddRes struct {
@@ -36,7 +37,7 @@ type StatusRes struct {
 	Hash       internal.Hash       `json:"block_hash"`
 	Number     uint64              `json:"block_number"`
 	KnownPeers map[string]PeerNode `json:"peers_known"`
-	PendingTXs []internal.Tx       `json:"pending_txs"`
+	PendingTXs []internal.SignedTx `json:"pending_txs"`
 }
 
 type SyncRes struct {

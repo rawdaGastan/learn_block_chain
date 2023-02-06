@@ -28,13 +28,13 @@ var migrateCmd = func() *cobra.Command {
 			)
 
 			n := node.New(getDataDirFromCmd(cmd), ip, port, internal.NewAccount(miner), peer)
-
-			n.AddPendingTX(internal.NewTx("rawda", "rawda", 3, ""), peer)
-			n.AddPendingTX(internal.NewTx("rawda", "babayaga", 2000, ""), peer)
-			n.AddPendingTX(internal.NewTx("babayaga", "rawda", 1, ""), peer)
-			n.AddPendingTX(internal.NewTx("babayaga", "caesar", 1000, ""), peer)
-			n.AddPendingTX(internal.NewTx("babayaga", "rawda", 50, ""), peer)
-
+			/*
+				n.AddPendingTX(internal.NewTx("rawda", "rawda", 3, ""), peer)
+				n.AddPendingTX(internal.NewTx("rawda", "babayaga", 2000, ""), peer)
+				n.AddPendingTX(internal.NewTx("babayaga", "rawda", 1, ""), peer)
+				n.AddPendingTX(internal.NewTx("babayaga", "caesar", 1000, ""), peer)
+				n.AddPendingTX(internal.NewTx("babayaga", "rawda", 50, ""), peer)
+			*/
 			ctx, closeNode := context.WithTimeout(context.Background(), time.Minute*15)
 
 			go func() {

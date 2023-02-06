@@ -5,7 +5,9 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/rawdaGastan/learn_block_chain/internal"
+	"github.com/rawdaGastan/learn_block_chain/wallet"
 )
 
 func listBalancesHandler(w http.ResponseWriter, r *http.Request, state *internal.State) {
@@ -20,8 +22,28 @@ func txAddHandler(w http.ResponseWriter, r *http.Request, node *Node) {
 		return
 	}
 
-	tx := internal.NewTx(internal.NewAccount(req.From), internal.NewAccount(req.To), req.Value, req.Data)
-	err = node.AddPendingTX(tx, node.info)
+	from := internal.NewAccount(req.From)
+
+	if from.String() == common.HexToAddress("").String() {
+		writeErrRes(w, fmt.Errorf("%s is an invalid 'from' sender", from.String()))
+		return
+	}
+
+	if req.FromPwd == "" {
+		writeErrRes(w, fmt.Errorf("password to decrypt the %s account is required. 'from_pwd' is empty", from.String()))
+		return
+	}
+
+	nonce := node.state.GetNextAccountNonce(from)
+	tx := internal.NewTx(from, internal.NewAccount(req.To), req.Value, nonce, req.Data)
+
+	signedTx, err := wallet.SignTxWithKeystoreAccount(tx, from, req.FromPwd, wallet.GetKeystoreDirPath(node.dataDir))
+	if err != nil {
+		writeErrRes(w, err)
+		return
+	}
+
+	err = node.AddPendingTX(signedTx, node.info)
 	if err != nil {
 		writeErrRes(w, err)
 		return

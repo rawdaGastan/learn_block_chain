@@ -8,22 +8,23 @@ import (
 	"strings"
 )
 
-func initDataDirIfNotExists(dataDir string) error {
+func InitDataDirIfNotExists(dataDir string, genesis []byte) error {
 	if fileExist(getGenesisJsonFilePath(dataDir)) {
 		return nil
 	}
-	dbDir := getDatabaseDirPath(dataDir)
-	if err := os.MkdirAll(dbDir, os.ModePerm); err != nil {
+
+	if err := os.MkdirAll(getDatabaseDirPath(dataDir), os.ModePerm); err != nil {
 		return err
 	}
-	gen := getGenesisJsonFilePath(dataDir)
-	if err := writeGenesisToDisk(gen); err != nil {
+
+	if err := writeGenesisToDisk(getGenesisJsonFilePath(dataDir), genesis); err != nil {
 		return err
 	}
-	blocks := getBlocksDbFilePath(dataDir)
-	if err := writeEmptyBlocksDbToDisk(blocks); err != nil {
+
+	if err := writeEmptyBlocksDbToDisk(getBlocksDbFilePath(dataDir)); err != nil {
 		return err
 	}
+
 	return nil
 }
 
